@@ -50,7 +50,7 @@ sudo apt-get install -y kubelet=1.20.1-00 kubeadm=1.20.1-00 kubectl=1.20.1-00
 
 sudo apt-mark hold kubelet kubeadm kubectl
 
-if [ "$1" != "-m" ]; then
+if [ "$1" = "-m" ]; then
     sudo kubeadm init --pod-network-cidr 192.168.0.0/16
 
     mkdir -p $HOME/.kube
