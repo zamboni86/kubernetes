@@ -1,59 +1,66 @@
-sudo su
-
-# installing kubeadm
-yum update -y
-
-# disable SELinux.
-echo 'disabling SELinux...'
-setenforce 0
-sed -i --follow-symlinks 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/sysconfig/selinux
-
-# enable the br_netfilter module for cluster communication.
-echo 'enable br_netfilter...'
-modprobe br_netfilter
-echo '1' > /proc/sys/net/bridge/bridge-nf-call-iptables
-
-# install docker prerequisites
-yum install -y yum-utils device-mapper-persistent-data lvm2
-
-# install docker
-yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-yum install -y docker-ce
-
-# configure the docker Cgroup driver to systemd, enable and start docker
-sed -i '/^ExecStart/ s/$/ --exec-opt native.cgroupdriver=systemd/' /usr/lib/systemd/system/docker.service 
-systemctl daemon-reload
-systemctl enable docker --now
-systemctl status docker
-docker info | grep -i cgroup
-
-# add the Kubernetes repo.
-cat <<EOF > /etc/yum.repos.d/kubernetes.repo
-[kubernetes]
-name=Kubernetes
-baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
-enabled=1
-gpgcheck=0
-repo_gpgcheck=0
-gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg
-      https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+# created for Ubuntu 18.04 LTS
+# load some kernel modules and modify some system settings 
+cat <<EOF | sudo tee /etc/modules-load.d/containerd.conf
+overlay
+br_netfilter
 EOF
 
-# install kubernetes
-yum install -y kubelet kubeadm kubectl
+sudo modprobe overlay
 
-systemctl enable kubelet
+sudo modprobe br_netfilter
 
-# initialize the cluster using the IP range for Flannel.
-kubeadm init --pod-network-cidr=10.244.0.0/16
+cat <<EOF | sudo tee /etc/sysctl.d/99-kubernetes-cri.conf
+net.bridge.bridge-nf-call-iptables  = 1
+net.ipv4.ip_forward                 = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+EOF
 
-#exit sudo
-mkdir -p $HOME/.kube
-sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-sudo chown $(id -u):$(id -g) $HOME/.kube/config
+sudo sysctl --system
 
-# deploy flannel
-kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
+# install and configure containerd
+sudo apt-get update
 
-# check cluster status
-kubectl get pods --all-namespaces
+sudo apt-get install -y containerd
+
+sudo mkdir -p /etc/containerd
+
+sudo containerd config default | sudo tee /etc/containerd/config.toml
+
+sudo systemctl restart containerd
+
+# disable swap
+sudo swapoff -a
+
+sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+
+#install kubeadm, kubelet, and kubectl.
+sudo apt-get update
+
+sudo apt-get install -y apt-transport-https curl
+
+curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+
+cat <<EOF | sudo tee /etc/apt/sources.list.d/kubernetes.list
+deb https://apt.kubernetes.io/ kubernetes-xenial main
+EOF
+
+sudo apt-get update
+
+sudo apt-get install -y kubelet=1.20.1-00 kubeadm=1.20.1-00 kubectl=1.20.1-00
+
+sudo apt-mark hold kubelet kubeadm kubectl
+
+if [ "$1" != "-m" ]; then
+    sudo kubeadm init --pod-network-cidr 192.168.0.0/16
+
+    mkdir -p $HOME/.kube
+
+    sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+
+    sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+    # install network addon
+    kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
+
+fi
+
